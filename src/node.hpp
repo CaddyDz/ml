@@ -57,64 +57,64 @@ template <typename T> class tNode : public Node
 {
 private:
 
-    T m_data;
+	T m_data;
 
 public:
-    tNode<T>():Node(){}
-    tNode<T>(const tNode<T>& node):Node(node)
-    {
-        m_data = node.data();
-    }
+	tNode<T>():Node(){}
+	tNode<T>(const tNode<T>& node):Node(node)
+	{
+		m_data = node.data();
+	}
 
-    virtual ~tNode<T>(){}
+	virtual ~tNode<T>(){}
 
-    tNode<T>& operator=(const tNode<T>& node)
-    {
-        if (this != node)
-        {
-            Node::operator=(node);
-            m_data = node.data();
-        }
+	tNode<T>& operator=(const tNode<T>& node)
+	{
+		if (this != node)
+		{
+			Node::operator=(node);
+			m_data = node.data();
+		}
 
-        return (*this);
-    }
+		return (*this);
+	}
 
-    tNode<T>(const OPERATOR& op, Node* left, Node* right)
-    {
-        m_type = NodeType::OPERATOR;
-        m_left = left;
-        m_right = right;
-        m_data = op;
+	tNode<T>(const OPERATOR& op, Node* left, Node* right)
+	{
+		m_type = NodeType::OPERATOR;
+		m_left = left;
+		m_right = right;
+		m_data = op;
 
-        this->rearrange();
+		this->rearrange();
 
-        if (m_left) m_left->inc_depth();
-        if (m_right) m_right->inc_depth();
+		if (m_left) m_left->inc_depth();
+		if (m_right) m_right->inc_depth();
 
-    }
+	}
 
-    tNode<T>(const T& data){
-        m_data = data;
-        }
+	tNode<T>(const T& data){
+		m_data = data;
+		}
 
 	/*
 	 * Node operations
 	 */
 
-    T data() const{return m_data;}
-    inline void s_data(T val){m_data = val;}
-    virtual void print() const
-    {
-        Node::print();
-        return;
-    }
+	T data() const{return m_data;}
+	inline void s_data(T val){m_data = val;}
+	virtual void print() const
+	{
+		Node::print();
+		return;
+	}
 
-    double eval() const
-    {
-      return 1.0;
+	double eval() const
+	{
+	  return 1.0;
 
 
-    }
+	}
 };
 
 #endif // NODE_HPP

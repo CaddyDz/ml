@@ -23,21 +23,21 @@ using namespace std;
 class CRender
 {
 private:
-    QGraphicsScene* m_scene;
+	QGraphicsScene* m_scene;
 
 public:
-    CRender();
-    ~CRender();
+	CRender();
+	~CRender();
 
-    QGraphicsScene* scene() const{return m_scene;};
-    void drawRect(qreal x, qreal y, qreal rad, string txt);
-    void drawCircle(qreal x, qreal y, qreal rad, string txt);
-    void drawLine(qreal x1, qreal y1, qreal x2, qreal y2);
-    void drawTree(Tree*);
+	QGraphicsScene* scene() const{return m_scene;};
+	void drawRect(qreal x, qreal y, qreal rad, string txt);
+	void drawCircle(qreal x, qreal y, qreal rad, string txt);
+	void drawLine(qreal x1, qreal y1, qreal x2, qreal y2);
+	void drawTree(Tree*);
 
-    void drawNode(Node*,qreal x, qreal y);
+	void drawNode(Node*,qreal x, qreal y);
 
-    void clear();
+	void clear();
 };
 
 #endif // RENDER_HPP

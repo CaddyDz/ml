@@ -26,27 +26,27 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 
 SOURCES += \
-        main.cpp \
-        widget.cpp \
-    node.cpp \
-    tree.cpp \
-    render.cpp \
-    parser.cpp \
-    defs.cpp \
-    treegenerator.cpp \
-    classifier.cpp \
-    data.cpp
+		main.cpp \
+		widget.cpp \
+	node.cpp \
+	tree.cpp \
+	render.cpp \
+	parser.cpp \
+	defs.cpp \
+	treegenerator.cpp \
+	classifier.cpp \
+	data.cpp
 
 HEADERS += \
-        widget.h \
-    defs.hpp \
-    node.hpp \
-    tree.hpp \
-    render.hpp \
-    parser.hpp \
-    treegenerator.hpp \
-    classifier.hpp \
-    data.hpp
+		widget.h \
+	defs.hpp \
+	node.hpp \
+	tree.hpp \
+	render.hpp \
+	parser.hpp \
+	treegenerator.hpp \
+	classifier.hpp \
+	data.hpp
 
 FORMS += \
-        widget.ui
+		widget.ui
