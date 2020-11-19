@@ -20,7 +20,7 @@ public:
 	~CClassifier();
 	CClassifier(const CClassifier&) = delete;
 
-   // const Error& get_generation(int) const;
+	// const Error& get_generation(int) const;
 
 	void s_data(CData* data){m_ref_data.push_back(data);}
 	void s_nb_elm_per_gen(int nb_elm){m_nb_elmt_per_gen = nb_elm;}
