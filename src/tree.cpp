@@ -1,5 +1,12 @@
 #include "tree.hpp"
 
+#include <cmath>
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
+#include <unordered_set>
+
 Tree::~Tree()
 {
 	if (m_root) delete m_root;
@@ -11,9 +18,11 @@ void Tree::clear(bool force_delete)
 		if (m_root) delete m_root;
 
 	m_root = nullptr;
+	m_depth = 0;
 	m_nodes.clear();
 	m_nodes_per_depth.clear();
 	m_node_at_pos.clear();
+	m_list_variables.clear();
 }
 
 bool Tree::find_node(Node* node_to_find) const
@@ -29,197 +38,147 @@ bool Tree::find_node(Node* node_to_find) const
 
 const std::vector<Node*>& Tree::nodes_at_depth(int dp)
 {
+	static const std::vector<Node*> no_nodes;
+
 	auto it = m_nodes_per_depth.find(dp);
 
 	if (it != m_nodes_per_depth.end())
-		return m_nodes_per_depth[dp];
+		return it->second;
 	else
-		return std::vector<Node*>();
+		return no_nodes;
 
+}
+
+namespace
+{
+	// true if the node holds the value written as in an equation ("4", "-2.5", "x",
+	// "+", "sin"). The node's own type decides how the text is read, so negative
+	// constants and any variable name (e.g. "x1" from the generator) can be found.
+	bool holds_value(Node* node, const std::string& val)
+	{
+		switch (node->type())
+		{
+		case NodeType::CONSTANT:
+		{
+			bool sign = !val.empty() && (val[0] == '-' || val[0] == '+');
+			std::string number = sign ? val.substr(1) : val;
+
+			if (!is_number(number))
+				return false;
+
+			double value = (val[0] == '-') ? -to_number(number) : to_number(number);
+			return static_cast<tNode<double>*>(node)->data() == value;
+		}
+
+		case NodeType::VARIABLE:
+			return static_cast<tNode<std::string>*>(node)->data() == val;
+
+		case NodeType::OPERATOR:
+		{
+			auto op = str2op.find(val);
+			return op != str2op.end() && static_cast<tNode<OPERATOR>*>(node)->data() == op->second;
+		}
+
+		case NodeType::FUNCTION:
+		{
+			auto fn = str2fn.find(val);
+			return fn != str2fn.end() && static_cast<tNode<FUNCTION>*>(node)->data() == fn->second;
+		}
+
+		default:
+			return false;
+		}
+	}
 }
 
 Node* Tree::find_node_from_val(std::string val)
 {
-	if (is_number(val))
-	{
-		double vald = std::stod(val);
+	auto it = std::find_if(m_nodes.begin(), m_nodes.end(),
+						   [&val](Node* node){ return holds_value(node, val); });
 
-		auto it = std::find_if(m_nodes.begin(), m_nodes.end(),
-							   [&vald](Node* node)
-								{
-									if (node->type() == NodeType::CONSTANT)
-									{
-										tNode<double>* tnode = static_cast<tNode<double>*>(node);
-										return (tnode->data() == vald);
-									}
-								}
-							   );
-
-		if (it != m_nodes.end())
-			return *it;
-		else
-			return nullptr;
-	}
-	else if (is_operator(val))
-	{
-		OPERATOR vald = str2op[val];
-
-		auto it = std::find_if(m_nodes.begin(), m_nodes.end(),
-							   [&vald](Node* node)
-								{
-									if (node->type() == NodeType::OPERATOR)
-									{
-										tNode<OPERATOR>* tnode = static_cast<tNode<OPERATOR>*>(node);
-										return (tnode->data() == vald);
-									}
-								}
-							   );
-
-		if (it != m_nodes.end())
-			return *it;
-		else
-			return nullptr;
-	}
-	else if (is_variable(val))
-	{
-
-		auto it = std::find_if(m_nodes.begin(), m_nodes.end(),
-							   [&val](Node* node)
-								{
-									if (node->type() == NodeType::VARIABLE)
-									{
-										tNode<std::string>* tnode = static_cast<tNode<std::string>*>(node);
-										return (tnode->data() == val);
-									}
-								}
-							   );
-
-		if (it != m_nodes.end())
-			return *it;
-		else
-			return nullptr;
-	}
-	else if (is_func(val))
-	{
-		FUNCTION vald = str2fn[val];
-
-		auto it = std::find_if(m_nodes.begin(), m_nodes.end(),
-							   [&vald](Node* node)
-								{
-									if (node->type() == NodeType::FUNCTION)
-									{
-										tNode<FUNCTION>* tnode = static_cast<tNode<FUNCTION>*>(node);
-										return (tnode->data() == vald);
-									}
-								}
-							   );
-
-		if (it != m_nodes.end())
-			return *it;
-		else
-			return nullptr;
-	}
-
-	return nullptr;
-
-
-
+	return (it != m_nodes.end()) ? *it : nullptr;
 }
 
 Node* Tree::find_node_from_val_at_depth(std::string val, unsigned int dp)
 {
-	// identification of the value type
-	NodeType type;
-	if (is_variable(val))
-		type = NodeType::VARIABLE;
-	else if (is_number(val))
-		type = NodeType::CONSTANT;
-	else if (is_func(val))
-		type = NodeType::FUNCTION;
-	else if (is_operator(val))
-		type = NodeType::OPERATOR;
-	else
-	{
-		std::cerr << "Type of the value not recognized. Exiting function find_node_from_val_at_depth" << std::endl;
-		return nullptr;
-	}
+	const std::vector<Node*>& nodes = this->nodes_at_depth(dp);
 
-	auto it = m_nodes_per_depth.find(dp);
+	auto it = std::find_if(nodes.begin(), nodes.end(),
+						   [&val](Node* node){ return holds_value(node, val); });
 
-	if (it != m_nodes_per_depth.end())
-	{
-		std::vector<Node*> nodes_at_depth = it->second;
-
-		for(auto node: nodes_at_depth)
-		{
-			if (node->type() == type)
-			{
-				switch (type)
-				{
-				case NodeType::CONSTANT:
-				{
-					tNode<double>* tnb = static_cast<tNode<double>*>(node);
-					if (tnb->data() == std::stod(val)) return node;
-					break;
-				}
-
-				case NodeType::OPERATOR:
-				{
-					tNode<OPERATOR>* top = static_cast<tNode<OPERATOR>*>(node);
-					if (top->data() == str2op[val]) return node;
-					break;
-				}
-
-				case NodeType::FUNCTION:
-				{
-					tNode<FUNCTION>* tfunc = static_cast<tNode<FUNCTION>*>(node);
-					if (tfunc->data() == str2fn[val]) return node;
-					break;
-				}
-
-				case NodeType::VARIABLE:
-				{
-					tNode<std::string>* tvar = static_cast<tNode<std::string>*>(node);
-					if (tvar->data() == val) return node;
-					break;
-				}
-
-				default:
-					std::cerr << "Type of the node not recognized. Exiting function find_node_from_val_at_depth" << std::endl;
-					return nullptr;
-					break;
-				}
-			}
-		}
-	}
-	return nullptr;
+	return (it != nodes.end()) ? *it : nullptr;
 }
 
 void Tree::makeRoot(Node* root)
 {
 	if (m_root != NULL)
 	{
-		std::cerr << "WARNING: Change of Root node." << std::endl;
+		std::cerr << "WARNING: the tree already has a root node, makeRoot() ignored. Call clear() first." << std::endl;
 		return;
 	}
 
 	m_root = root;
-	m_root->s_depth(1);
+	if (m_root) m_root->s_depth(1);
 }
 
-void Tree::expand_from_root(Node* node)
+bool Tree::shares_nodes_with(Node* subtree) const
 {
-	if (node != nullptr)
+	// true if a node of the subtree is a node of this tree
+	std::unordered_set<Node*> own(m_nodes.begin(), m_nodes.end());
+	std::vector<Node*> to_visit{subtree};
+
+	while (!to_visit.empty())
 	{
-		node->s_left(m_root);
-		node->s_right(nullptr);
+		Node* node = to_visit.back();
+		to_visit.pop_back();
 
-		m_root = node;
-		m_root->s_depth(1);
+		if (node == nullptr)
+			continue;
 
-		// rebuild the tree
-		this->build();
+		if (own.count(node))
+			return true;
+
+		to_visit.push_back(node->left());
+		to_visit.push_back(node->right());
 	}
+
+	return false;
+}
+
+bool Tree::expand_from_root(Node* node)
+{
+	if (node == nullptr)
+		return false;
+
+	bool binary = (node->type() == NodeType::OPERATOR);
+
+	if (node->type() == NodeType::FUNCTION)
+	{
+		FUNCTION fn = static_cast<tNode<FUNCTION>*>(node)->data();
+		binary = (fn == FUNCTION::MIN || fn == FUNCTION::MAX);
+	}
+
+	// the former root becomes the left operand of the node: it needs a tree to wrap,
+	// an operator or a function with a free left side and the right operand it takes
+	// (if any), and no node of the tree in its subtree (that would create a cycle)
+	if (m_root == nullptr || node->left() != nullptr ||
+		(node->type() != NodeType::OPERATOR && node->type() != NodeType::FUNCTION) ||
+		binary != (node->right() != nullptr) || this->shares_nodes_with(node))
+	{
+		std::cerr << "Tree::expand_from_root: the new root must be an operator or a function with no left child and its right operand if it takes two, outside the tree. Nothing done." << std::endl;
+		return false;
+	}
+
+	node->s_left(m_root);
+
+	m_root = node;
+	m_root->s_parent(nullptr);
+	m_root->s_depth(1);
+
+	// rebuild the tree
+	this->build();
+
+	return true;
 }
 
 void Tree::print()
@@ -299,6 +258,137 @@ void Tree::print()
 				);
 }
 
+namespace
+{
+	// precedence of what a node writes: + - 1, * / 2, ^ 3, anything else 4 (never
+	// needs parentheses)
+	int precedence(Node* node)
+	{
+		if (node == nullptr || node->type() != NodeType::OPERATOR)
+			return 4;
+
+		switch (static_cast<tNode<OPERATOR>*>(node)->data())
+		{
+		case OPERATOR::ADD:
+		case OPERATOR::MINUS:
+			return 1;
+
+		case OPERATOR::PROD:
+		case OPERATOR::DIV:
+			return 2;
+
+		default:
+			return 3;
+		}
+	}
+
+	void write(std::ostream& os, Node* node, int precision);
+
+	void write_operand(std::ostream& os, Node* node, int precision, bool parentheses)
+	{
+		if (parentheses) os << '(';
+		write(os, node, precision);
+		if (parentheses) os << ')';
+	}
+
+	void write(std::ostream& os, Node* node, int precision)
+	{
+		if (node == nullptr)
+		{
+			os << '?';
+			return;
+		}
+
+		switch (node->type())
+		{
+		case NodeType::CONSTANT:
+		{
+			double value = static_cast<tNode<double>*>(node)->data();
+			std::ostringstream number;
+			number.imbue(std::locale::classic());
+			number << std::setprecision(precision) << std::abs(value);
+
+			// the parser would read the sign of an exponent (1e-05) as an operator: group it
+			std::string text = number.str();
+			if (text.find_first_not_of("0123456789.") != std::string::npos)
+				text = "(" + text + ")";
+
+			// a negative constant is a sign before a number, at the start of a group
+			if (std::signbit(value))
+				os << "(-" << text << ')';
+			else
+				os << text;
+			break;
+		}
+
+		case NodeType::VARIABLE:
+			os << static_cast<tNode<std::string>*>(node)->data();
+			break;
+
+		case NodeType::FUNCTION:
+		{
+			FUNCTION fn = static_cast<tNode<FUNCTION>*>(node)->data();
+
+			os << '_' << fn2str[fn] << '[';
+			write(os, node->left(), precision);
+
+			if (fn == FUNCTION::MIN || fn == FUNCTION::MAX)
+			{
+				os << ',';
+				write(os, node->right(), precision);
+			}
+
+			os << ']';
+			break;
+		}
+
+		case NodeType::OPERATOR:
+		{
+			int level = precedence(node);
+			int left = precedence(node->left());
+			int right = precedence(node->right());
+
+			// + - * / are left-associative, so an operand of the same level is grouped
+			// on the right (a-(b-c)); ^ is right-associative, so on the left ((a^b)^c)
+			write_operand(os, node->left(), precision, left < level || (level == 3 && left == 3));
+			os << op2str[static_cast<tNode<OPERATOR>*>(node)->data()];
+			write_operand(os, node->right(), precision, right < level || (level < 3 && right == level));
+			break;
+		}
+
+		default:
+			os << '?';
+			break;
+		}
+	}
+}
+
+std::string Tree::to_equation(int precision) const
+{
+	if (m_root == nullptr)
+		return "";
+
+	std::ostringstream os;
+	os.imbue(std::locale::classic());
+	write(os, m_root, precision);
+
+	return os.str();
+}
+
+Tree* Tree::clone() const
+{
+	Tree* copy = new Tree();
+
+	if (m_root != nullptr)
+	{
+		copy->m_list_variables = m_list_variables;   // build() keeps the values of these
+		copy->makeRoot(m_root->clone());
+		copy->build();
+	}
+
+	return copy;
+}
+
 void Tree::print_variables()
 {
 	std::cout << "List of variables: ";
@@ -313,10 +403,21 @@ void Tree::print_variables()
 
 void Tree::build()
 {
+	// every index is rebuilt from scratch: the tree may have shrunk since the last build
+	m_depth = 0;
+	m_nodes.clear();
+	m_nodes_per_depth.clear();
+	m_node_at_pos.clear();
+
+	if (m_root == nullptr)
+	{
+		m_list_variables.clear();
+		return;
+	}
+
 	// compute depth for root AND children
 	m_root->s_depth(1);
 
-	m_nodes.clear();
 	m_nodes.reserve(50);
 	m_nodes.push_back(m_root);
 
@@ -339,7 +440,8 @@ void Tree::build()
 	}
 	while(pos < m_nodes.size());
 
-	m_nodes_per_depth.clear();
+	// variables no longer in the tree are dropped, the others keep their value
+	std::map<std::string, double> variables;
 
 	for(auto node: m_nodes)
 	{
@@ -350,56 +452,74 @@ void Tree::build()
 		if (node->type() == NodeType::VARIABLE)
 		{
 			tNode<std::string>* tnode = static_cast<tNode<std::string>*>(node);
-			m_list_variables.emplace(std::pair<std::string,double>(tnode->data(),0));
+			auto it = m_list_variables.find(tnode->data());
+			variables.emplace(tnode->data(), (it != m_list_variables.end()) ? it->second : 0.0);
 		}
 	}
 
-	// build the nodes per position
-	m_node_at_pos.clear();
+	m_list_variables.swap(variables);
 
-	unsigned int max_nodes_nb = pow(2,m_depth-1);
+	// build the nodes per position (heap numbering: the children of position p are
+	// at 2p+1 and 2p+2). Only existing nodes are visited, so the cost is linear in
+	// the number of nodes instead of exponential in the depth.
+	std::vector<std::pair<Node*,long long>> positions{{m_root, 0}};
 	m_node_at_pos[0] = m_root;
-	for(pos=0; pos<max_nodes_nb; pos++)
+
+	for(std::size_t i=0; i<positions.size(); i++)
 	{
-		auto it = m_node_at_pos.find(pos);
+		Node* node = positions[i].first;
+		long long p = positions[i].second;
 
-		if (it != m_node_at_pos.end())
-		{
-			Node* node = it->second;
+		// nothing below the deepest level, and positions must fit in the int key
+		if (node->depth() >= m_depth || 2*p+2 > std::numeric_limits<int>::max())
+			continue;
 
-			if (node != nullptr)
-			{
-			  Node* left = node->left();
-			  Node* right = node->right();
+		Node* left = node->left();
+		Node* right = node->right();
 
-			  m_node_at_pos[2*pos+1] = left;
-			  m_node_at_pos[2*pos+2] = right;
-			}
-		}
-	}while(pos < max_nodes_nb)
+		m_node_at_pos[2*p+1] = left;
+		m_node_at_pos[2*p+2] = right;
+
+		if (left != nullptr) positions.emplace_back(left, 2*p+1);
+		if (right != nullptr) positions.emplace_back(right, 2*p+2);
+	}
 
 	return;
 }
 
-void Tree::replace(Node* node_to_replace, Node* node)
+bool Tree::replace(Node* node_to_replace, Node* node)
 {
-	if (node)
+	if (node == nullptr || !this->find_node(node_to_replace))
+		return false;
+
+	// a node of this tree in the new subtree would end up with two parents (or be
+	// deleted with node_to_replace): graft a clone() instead
+	if (this->shares_nodes_with(node))
 	{
-		if (this->find_node(node_to_replace))
-		{
-			Node* parent = node_to_replace->parent();
-
-			if (parent->left() == node_to_replace)
-				parent->s_left(node);
-			else
-				parent->s_right(node);
-
-			node->s_parent(parent);
-			delete node_to_replace;
-
-			this->build();
-		}
+		std::cerr << "Tree::replace: the new subtree shares nodes with the tree, use a clone(). Nothing done." << std::endl;
+		return false;
 	}
+
+	if (node_to_replace == m_root)
+	{
+		node->s_parent(nullptr);
+		m_root = node;
+	}
+	else
+	{
+		Node* parent = node_to_replace->parent();
+
+		if (parent->left() == node_to_replace)
+			parent->s_left(node);
+		else
+			parent->s_right(node);
+	}
+
+	delete node_to_replace;
+
+	this->build();
+
+	return true;
 }
 
 void Tree::add_variable(std::string name, double val)
@@ -418,6 +538,9 @@ double Tree::compute_value(const std::map<std::string,double>& vars)
 {
 	double val=0.;
 
+	if (m_root == nullptr) // an empty tree has no value
+		return std::numeric_limits<double>::quiet_NaN();
+
 	if (m_list_variables.empty()) // Function is constant
 		val = this->eval(m_root);
 	else
@@ -433,9 +556,9 @@ double Tree::compute_value(const std::map<std::string,double>& vars)
 			}
 			else
 			{
-				std::cerr << "Parameters list is not complete. Returning 0." << std::endl;
-				val = 0.0;
-				return 0.0;
+				// NaN rather than 0: a value computed without its variables is not a result
+				std::cerr << "Parameters list is not complete. Returning NaN." << std::endl;
+				return std::numeric_limits<double>::quiet_NaN();
 			}
 		}
 
@@ -461,8 +584,8 @@ double Tree::eval(Node* node)
 
 			if (it == m_list_variables.end())
 			{
-				std::cerr << "Variable not found. Returning 0.0" << std::endl;
-				return 0.0;
+				std::cerr << "Variable not found (call build() after renaming one). Returning NaN" << std::endl;
+				return std::numeric_limits<double>::quiet_NaN();
 			}
 
 			return m_list_variables[var];
@@ -489,17 +612,21 @@ double Tree::eval(Node* node)
 
 			case OPERATOR::DIV:
 			{
-				if (val2 == 0)
-				{
-					std::cerr << "Division by 0. Returning 0." << std::endl;
+				// protected division: x/0 is 0 (silently: evolution evaluates many such
+				// trees), but an invalid numerator stays invalid
+				if (val2 == 0 && std::isfinite(val1))
 					return 0.0;
-				}
+				else if (val2 == 0)
+					return val1;
 				else
 					return val1/val2;
 
 			}
 
 			case OPERATOR::POW:
+				// pow(NaN, 0) and pow(1, NaN) are 1: keep the invalid value instead
+				if (std::isnan(val1) || std::isnan(val2))
+					return std::numeric_limits<double>::quiet_NaN();
 				return pow(val1,val2);
 
 			default:
@@ -534,21 +661,22 @@ double Tree::eval(Node* node)
 				return exp(val1);
 
 			case FUNCTION::LN:
-				return log2(val1);
-
-			case FUNCTION::LOG:
 				return log(val1);
 
+			case FUNCTION::LOG:
+				return log10(val1);
+
+			// std::max/min would keep or drop a NaN depending on the order of the arguments
 			case FUNCTION::MAX:
 			{
 				double val2 = this->eval(node->right());
-				return max(val1,val2);
+				return (std::isnan(val1) || std::isnan(val2)) ? std::numeric_limits<double>::quiet_NaN() : max(val1,val2);
 			}
 
 			case FUNCTION::MIN:
 			{
 				double val2 = this->eval(node->right());
-				return min(val1,val2);
+				return (std::isnan(val1) || std::isnan(val2)) ? std::numeric_limits<double>::quiet_NaN() : min(val1,val2);
 			}
 
 			case FUNCTION::ROOTSQUARE:
@@ -568,59 +696,50 @@ double Tree::eval(Node* node)
 		}
 	}
 
-	return 0.0;
+	// a missing operand, or a node whose type was never set, has no value
+	return std::numeric_limits<double>::quiet_NaN();
 }
 
 void Tree::remove_intermediate(Node* node_to_remove, int location)
 {
-	std::cout << "On entre ici"<<std::endl;
-
-	if (node_to_remove == nullptr)
+	// location is the child that takes the place of the removed node: left=0 and right=1.
+	// The other child is deleted with its subtree.
+	if (node_to_remove == nullptr || (location != 0 && location != 1))
 		return;
 
-	// location stands for left=0 and right=1;
+	if (!this->find_node(node_to_remove))
+		return;
 
-	// Remove parent and copy left instead
-	auto it = std::find(m_nodes.begin(), m_nodes.end(),node_to_remove);
+	Node* kept = (location == 0) ? node_to_remove->left() : node_to_remove->right();
+	Node* dropped = (location == 0) ? node_to_remove->right() : node_to_remove->left();
 
-	if (it != m_nodes.end())
+	if (kept == nullptr)
 	{
-		Node* left = (*it)->left();
-		Node* right = (*it)->right();
-		Node* parent = (*it)->parent();
-
-		// Remove right node
-		if (location == 0)
-		{
-			if (right != nullptr) delete right;
-
-			left->s_parent(parent);
-			if (parent->which_node(node_to_remove))
-				parent->s_right(left);
-			else
-				parent->s_left(left);
-
-			node_to_remove->s_children(nullptr,nullptr);
-			delete node_to_remove;
-		}
-		else if (location == 1)
-		{
-			if (left != nullptr) delete left;
-
-			right->s_parent(parent);
-			if (parent->which_node(node_to_remove))
-				parent->s_right(right);
-			else
-				parent->s_left(right);
-
-			node_to_remove->s_children(nullptr,nullptr);
-			delete node_to_remove;
-
-
-		}
-
-		this->build();
+		std::cerr << "Tree::remove_intermediate: the child to keep is empty. Nothing removed." << std::endl;
+		return;
 	}
+
+	if (node_to_remove == m_root)
+	{
+		kept->s_parent(nullptr);
+		m_root = kept;
+	}
+	else
+	{
+		Node* parent = node_to_remove->parent();
+
+		if (parent->which_node(node_to_remove) == 1)
+			parent->s_right(kept);
+		else
+			parent->s_left(kept);
+	}
+
+	// detach the children so that deleting the node does not free the kept subtree
+	node_to_remove->s_children(nullptr,nullptr);
+	delete node_to_remove;
+	delete dropped;
+
+	this->build();
 
 	return;
 }

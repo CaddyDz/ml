@@ -7,6 +7,7 @@ namespace Ui {
 class Widget;
 }
 
+// Qt Designer form created with the project; the demo (main.cpp) does not use it.
 class Widget : public QWidget
 {
 	Q_OBJECT

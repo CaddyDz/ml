@@ -1,9 +1,16 @@
 #include "render.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 CRender::CRender()
 :m_scene(new QGraphicsScene())
 {
 	m_scene->setSceneRect(0,0,1500,500);
+
+	// black drawing on a white background, whatever the palette (a dark theme would
+	// otherwise draw white labels and black shapes on a dark background)
+	m_scene->setBackgroundBrush(Qt::white);
 }
 
 CRender::~CRender()
@@ -26,33 +33,115 @@ void CRender::clear()
 	return;
 }
 
-void CRender::drawRect(qreal x, qreal y, qreal rad, std::string txt)
+namespace
+{
+	struct Slot
+	{
+		Node* node;
+		int level;
+	};
+
+	// In-order sequence of the nodes: a node comes after all the nodes of its left
+	// subtree and before all the nodes of its right subtree. Giving each node its own
+	// column in this order, and its level as row, no two nodes can overlap.
+	void in_order(Node* node, int level, std::vector<Slot>& sequence)
+	{
+		if (node == nullptr)
+			return;
+
+		in_order(node->left(), level+1, sequence);
+		sequence.push_back({node, level});
+		in_order(node->right(), level+1, sequence);
+	}
+
+	std::string label(Node* node)
+	{
+		std::ostringstream os;
+
+		switch (node->type())
+		{
+		case NodeType::OPERATOR:
+			os << op2str[static_cast<tNode<OPERATOR>*>(node)->data()];
+			break;
+
+		case NodeType::VARIABLE:
+			os << static_cast<tNode<std::string>*>(node)->data();
+			break;
+
+		case NodeType::CONSTANT:
+			os << static_cast<tNode<double>*>(node)->data();
+			break;
+
+		case NodeType::FUNCTION:
+			os << fn2str[static_cast<tNode<FUNCTION>*>(node)->data()];
+			break;
+
+		default:
+			break;
+		}
+
+		return os.str();
+	}
+
+	// half width of a node shape: the node radius, or more if the label needs it. The
+	// ellipse (x/rx)^2 + (y/ry)^2 <= 1, with ry = node_radius, must contain the corners
+	// of the text, not only its width.
+	qreal half_width(const std::string& txt)
+	{
+		QGraphicsTextItem text(txt.c_str());
+		QFontMetricsF metrics(text.font());
+		qreal half_text = metrics.horizontalAdvance(QString::fromStdString(txt))/2 + 2;
+		qreal height_ratio = std::min<qreal>(metrics.height()/2/node_radius, 0.9);
+
+		return std::max<qreal>(node_radius, half_text/std::sqrt(1 - height_ratio*height_ratio));
+	}
+
+	// Point where the segment leaving 'center' in direction 'dir' (unit vector) crosses
+	// the border of a node shape of half sizes rx and ry: an ellipse, or the rectangle
+	// drawn for the root.
+	QPointF border(QPointF center, QPointF dir, qreal rx, qreal ry, bool rect)
+	{
+		qreal distance;
+
+		if (rect)
+		{
+			qreal dx = std::abs(dir.x()), dy = std::abs(dir.y());
+			distance = (dx*ry > dy*rx) ? rx/dx : ry/dy;
+		}
+		else
+			distance = 1/std::sqrt((dir.x()/rx)*(dir.x()/rx) + (dir.y()/ry)*(dir.y()/ry));
+
+		return center + distance*dir;
+	}
+}
+
+void CRender::drawShape(QPointF center, qreal rx, qreal ry, std::string txt, bool rect)
 {
 	if (m_scene)
 	{
-		QRect rect(x, y, 2*rad, 2*rad);
-		QGraphicsRectItem* op = new QGraphicsRectItem(rect);
-		m_scene->addItem(op);
+		QRectF shape(center.x()-rx, center.y()-ry, 2*rx, 2*ry);
+
+		if (rect)
+			m_scene->addItem(new QGraphicsRectItem(shape));
+		else
+			m_scene->addItem(new QGraphicsEllipseItem(shape));
 
 		QGraphicsTextItem* text = new QGraphicsTextItem(txt.c_str());
-		text->setPos(x+rad/2,y+rad/2);
+		text->setDefaultTextColor(Qt::black);
+		QRectF bounds = text->boundingRect();
+		text->setPos(center.x()-bounds.width()/2,center.y()-bounds.height()/2);
 		m_scene->addItem(text);
 	}
 }
 
+void CRender::drawRect(qreal x, qreal y, qreal rad, std::string txt)
+{
+	this->drawShape(QPointF(x+rad,y+rad), rad, rad, txt, true);
+}
+
 void CRender::drawCircle(qreal x, qreal y, qreal rad, std::string txt)
 {
-	if (m_scene)
-	{
-
-		QRect rect(x, y, 2*rad, 2*rad);
-		QGraphicsEllipseItem* op = new QGraphicsEllipseItem(rect);
-		m_scene->addItem(op);
-
-		QGraphicsTextItem* text = new QGraphicsTextItem(txt.c_str());
-		text->setPos(x+rad/2,y+rad/2);
-		m_scene->addItem(text);
-	}
+	this->drawShape(QPointF(x+rad,y+rad), rad, rad, txt, false);
 }
 
 void CRender::drawLine(qreal x1, qreal y1, qreal x2, qreal y2)
@@ -64,118 +153,84 @@ void CRender::drawLine(qreal x1, qreal y1, qreal x2, qreal y2)
 	}
 }
 
-void CRender::drawNode(Node* node, qreal x, qreal y)
+void CRender::drawSubtree(Node* node, qreal x, qreal y, bool root_as_rect)
 {
-	if (node)
+	// (x, y) is the top left corner of the drawing
+	if (node == nullptr || m_scene == nullptr)
+		return;
+
+	std::vector<Slot> sequence;
+	in_order(node, 0, sequence);
+
+	// columns from left to right, each as wide as its node, with a constant gap
+	const qreal gap = 2*shift_x - 2*node_radius;
+	std::map<Node*,QPointF> centers;
+	std::map<Node*,qreal> half_widths;
+	qreal right_edge = x - gap;
+
+	for (const Slot& slot: sequence)
 	{
-		double theta = 0.75*M_PI;
-		std::ostringstream os;
-		NodeType nt = node->type();
+		qreal rx = half_width(label(slot.node));
+		QPointF center(right_edge + gap + rx, y + node_radius + slot.level*shift_y);
 
-		if (nt == NodeType::OPERATOR)
-		{
-			tNode<OPERATOR>* tnode = dynamic_cast<tNode<OPERATOR>*>(node);
-			os << op2str[tnode->data()];
-		}
-		else if (nt == NodeType::VARIABLE)
-		{
-			tNode<std::string>* tnode = dynamic_cast<tNode<std::string>*>(node);
-			os << tnode->data();
-		}
-		else if (nt == NodeType::CONSTANT)
-		{
-			tNode<double>* tnode = dynamic_cast<tNode<double>*>(node);
-			os << tnode->data();
-		}
-		else if (nt == NodeType::FUNCTION)
-		{
-			tNode<FUNCTION>* tnode = dynamic_cast<tNode<FUNCTION>*>(node);
-			os << fn2str[tnode->data()];
-		}
+		centers[slot.node] = center;
+		half_widths[slot.node] = rx;
+		right_edge = center.x() + rx;
+	}
 
-		this->drawCircle(x,y,node_radius,os.str());
+	for (const Slot& slot: sequence)
+	{
+		Node* current = slot.node;
+		QPointF center = centers.at(current);
+		qreal rx = half_widths.at(current);
+		bool rect = root_as_rect && current == node;
 
-		qreal y1 = y+shift_y;
-		if (node->left())
-		{
-			qreal lx = x-1.5*shift_x;
-			this->drawNode(node->left(),lx,y1);
-			this->drawLine(x+node_radius*(1-sin(theta)),y+node_radius*(1-cos(theta)),lx+node_radius,y1);
-		}
+		this->drawShape(center, rx, node_radius, label(current), rect);
 
-		if (node->right())
+		for (Node* child: {current->left(), current->right()})
 		{
-			qreal rx = x+1.5*shift_x;
-			this->drawNode(node->right(),rx,y1);
-			this->drawLine(x+node_radius*(1+sin(theta)),y+node_radius*(1-cos(theta)),rx+node_radius,y1);
+			if (child == nullptr)
+				continue;
+
+			QPointF child_center = centers.at(child);
+			QPointF delta = child_center - center;
+			QPointF dir = delta / std::sqrt(QPointF::dotProduct(delta, delta));
+
+			QPointF from = border(center, dir, rx, node_radius, rect);
+			QPointF to = border(child_center, -dir, half_widths.at(child), node_radius, false);
+
+			this->drawLine(from.x(), from.y(), to.x(), to.y());
 		}
 	}
 
-	return;
+	// grow the scene so that the whole drawing can be scrolled to
+	m_scene->setSceneRect(m_scene->sceneRect().united(m_scene->itemsBoundingRect().adjusted(-20,-20,20,20)));
+}
+
+void CRender::drawNode(Node* node, qreal x, qreal y)
+{
+	// draws the whole subtree of node, (x, y) being the top left corner of the drawing
+	this->drawSubtree(node, x, y, false);
 }
 
 void CRender::drawTree(Tree* tree)
 {
-	if (tree->isEmpty())
-			return;
+	if (m_scene == nullptr)
+		return;
 
-	if (m_scene)
+	// a new drawing replaces the previous one (e.g. after a mutation), even when
+	// there is nothing to draw
+	this->clear();
+
+	if (tree == nullptr || tree->isEmpty() || tree->root() == nullptr)
 	{
-		unsigned int depth = tree->depth();
-		double theta = 0.25*M_PI;
-
-		std::ostringstream os;
-
-		// draw root - depth 1
-		int x = 750;
-		int y = 20;
-
-		Node* root = tree->root();
-
-		if (root)
-		{
-			NodeType nt = root->type();
-
-			if (nt == NodeType::OPERATOR)
-			{
-				tNode<OPERATOR>* tnode = dynamic_cast<tNode<OPERATOR>*>(root);
-				os << op2str[tnode->data()];
-			}
-			else if (nt == NodeType::VARIABLE)
-			{
-				tNode<std::string>* tnode = dynamic_cast<tNode<std::string>*>(root);
-				os << tnode->data();
-			}
-			else if (nt == NodeType::CONSTANT)
-			{
-				tNode<double>* tnode = dynamic_cast<tNode<double>*>(root);
-				os << tnode->data();
-			}
-			else if (nt == NodeType::FUNCTION)
-			{
-				tNode<FUNCTION>* tnode = dynamic_cast<tNode<FUNCTION>*>(root);
-				os << fn2str[tnode->data()];
-			}
-
-			this->drawRect(x,y,node_radius, os.str());
-		}
-
-		qreal y1 = y+shift_y;
-
-		// Draw others nodes
-		if (root->left())
-		{
-			qreal lx = x-depth*shift_x;
-			this->drawNode(root->left(),lx,y1);
-			this->drawLine(x,y+2*node_radius,lx+node_radius*(1+sin(theta)),y1 + node_radius*(1-cos(theta)));
-		}
-
-		if (root->right())
-		{
-			qreal rx = x+depth*shift_x;
-			this->drawNode(root->right(),rx,y1);
-			this->drawLine(x+2*node_radius,y+2*node_radius,rx+node_radius*(1-sin(theta)),y1 + node_radius*(1-cos(theta)));
-		}
-
+		m_scene->setSceneRect(0,0,1500,500);   // the size of a new scene
+		return;
 	}
+
+	// the root is drawn as a rectangle, the other nodes as ellipses
+	this->drawSubtree(tree->root(), 0, 0, true);
+
+	// fit the scene to the drawing, whatever the size of the tree
+	m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-20,-20,20,20));
 }

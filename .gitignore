@@ -1,1 +1,25 @@
 *.pro.user
+
+# Qt Creator shadow builds and settings
+/build-*/
+src/build/
+.qtc_clangd/
+
+# qmake build output (in-source build from src/)
+src/Makefile*
+src/.qmake.stash
+*.o
+*.obj
+moc_*
+ui_*.h
+src/Tree
+src/Tree.exe
+src/Tree.app/
+src/debug/
+src/release/
+
+# tests
+tests/test_core
+tests/test_core_plain
+tests/.flags
+*.dSYM/

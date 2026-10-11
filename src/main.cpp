@@ -7,6 +7,14 @@
 #include "treegenerator.hpp"
 #include "classifier.hpp"
 
+#include <cstdlib>
+#include <ctime>
+#include <algorithm>
+#include <random>
+#include <limits>
+#include <memory>
+#include <vector>
+
 int main(int argc, char *argv[])
 {
 	QApplication a(argc, argv);
@@ -177,7 +185,8 @@ int main(int argc, char *argv[])
 
 	if (gene)
 	{
-		tree6.replace(gene,tree7.root());
+		// graft a copy: tree7 keeps owning (and will delete) its own nodes
+		tree6.replace(gene,tree7.root()->clone());
 	}
 
 	CRender render7;
@@ -213,7 +222,7 @@ int main(int argc, char *argv[])
 	// Eval function value
 	//---------------------------------------------
 	std::map<std::string, double> vars{ {"x",-5},{"y",2},{"z",1},{"t",-1},{"theta",M_PI/4}};
-	std::cout << "Value with parameters x=3, y=2, z=1, t=-1, theta=PI/4 is: " << tree9.compute_value(vars) << std::endl;
+	std::cout << "Value with parameters x=-5, y=2, z=1, t=-1, theta=PI/4 is: " << tree9.compute_value(vars) << std::endl;
 
 	std::map<std::string, double> vars1{ {"x",6},{"y",-4},{"z",10},{"t",-1},{"theta",M_PI/6}};
 	std::cout << "Value with parameters x=6, y=-4, z=10, t=-1, theta=PI/6 is: " << tree9.compute_value(vars1) << std::endl;
@@ -227,55 +236,86 @@ int main(int argc, char *argv[])
 	Rules r1 {5, 5, {"x", "y"}, 0, 100000};
 
 	CTreeGenerator tg1(r1);
-	Tree* tree10 = tg1.generate_tree();
+	std::unique_ptr<Tree> tree10(tg1.generate_tree());
 
 	CRender render10;
-	render10.drawTree(tree10);
+	render10.drawTree(tree10.get());
 	QGraphicsView view10(render10.scene());
 	view10.show();
 
 	//---------------------------------------------
-	// Generate N tree and compute the errors against a set of data
+	// Symbolic regression: evolve a formula that fits a set of data
 	//---------------------------------------------
 
-	// function to fit is x^2 - y + 3
-	CData* data1 = new CData({{"x",0.0},{"y",-3.0}},6);
-	CData* data2 = new CData({{"x",1.0},{"y",-1.0}},5);
-	CData* data3 = new CData({{"x",2.0},{"y",3.0}},4);
-	CData* data4 = new CData({{"x",3.0},{"y",9.0}},3);
-	CData* data5 = new CData({{"x",4.0},{"y",17.0}},3);
+	// the seed of the run, from the command line to replay it (./Tree 4)
+	unsigned int seed = static_cast<unsigned int>(std::time(nullptr));
 
-	CClassifier cl;
-	cl.s_nb_elm_per_gen(20);
-	cl.s_data(data1);
-	cl.s_data(data2);
-	cl.s_data(data3);
-	cl.s_data(data4);
-	cl.s_data(data5);
-
-	Rules r2 {4, 2, {"x", "y"}, -50, 50};
-
-	CTreeGenerator tg2(r2);
-
-	for(int i=0; i<1; ++i)
+	if (argc > 1)
 	{
-		std::cout << "Generation --> "<<i+1<<"\n";
-		cl.compute_new_generation(&tg2);
-		cl.print_generation(i);
+		char* end = nullptr;
+		unsigned long value = std::strtoul(argv[1], &end, 10);
 
-		//Tree* tree11 = cl.get_tree_for_specific_generation(i,0);
-
-	   /* CRender render11;
-		render11.drawTree(tree11);
-		QGraphicsView view11(render11.scene());
-		view11.show()*/
+		if (end != argv[1] && *end == '\0')
+			seed = static_cast<unsigned int>(value);
 	}
 
-	if (data1 != nullptr) delete data1;
-	if (data2 != nullptr) delete data2;
-	if (data3 != nullptr) delete data3;
-	if (data4 != nullptr) delete data4;
-	if (data5 != nullptr) delete data5;
+	// samples of the function to find, x^2 - y + 3, on a 7x7 grid, with a little
+	// noise on each result like measured data would have: on exact results a
+	// formula off by a constant gets the same error on any set of points
+	std::mt19937 sampling(seed);
+	std::normal_distribution<double> noise(0.0, 0.1);
+	std::vector<std::unique_ptr<CData>> samples;
+	for (double x = -3; x <= 3; x += 1)
+		for (double y = -3; y <= 3; y += 1)
+			samples.emplace_back(new CData({{"x",x},{"y",y}}, x*x - y + 3 + noise(sampling)));
+
+	// a quarter of them, drawn at random, is held back to test the result: the
+	// evolution never sees them
+	std::shuffle(samples.begin(), samples.end(), sampling);
+	const std::size_t nb_test = samples.size() / 4;
+
+	CClassifier cl;
+	cl.s_nb_elm_per_gen(200);
+	for (std::size_t i = 0; i < samples.size(); ++i)
+	{
+		if (i < nb_test)
+			cl.s_test_data(samples[i].get());
+		else
+			cl.s_data(samples[i].get());
+	}
+
+	Rules r2 {4, 2, {"x", "y"}, -5, 5};
+	CTreeGenerator tg2(r2);
+	tg2.s_seed(seed);
+	cl.s_seed(seed);
+
+	std::cout << "Evolving a formula for x^2-y+3 from " << samples.size() - nb_test << " noisy samples, "
+			  << nb_test << " others held back for testing (seed " << seed << ")" << std::endl;
+
+	const int generations = 40;
+	double best = std::numeric_limits<double>::infinity();
+
+	for (int i = 0; i < generations; ++i)
+	{
+		cl.compute_new_generation(&tg2);
+
+		if (cl.get_score(0, i) < best)
+		{
+			best = cl.get_score(0, i);
+			std::cout << "Generation " << i+1 << ": training error " << best
+					  << ", test error " << cl.get_test_score(0, i) << "  "
+					  << cl.get_tree_for_specific_generation(0, i)->to_equation() << std::endl;
+		}
+	}
+
+	Tree* fittest = cl.get_tree_for_specific_generation(0, generations-1);
+
+	CRender render11;
+	render11.drawTree(fittest);
+	QGraphicsView view11(render11.scene());
+	if (fittest)
+		view11.setWindowTitle(QString::fromStdString("Best formula: " + fittest->to_equation()));
+	view11.show();
 
 	return a.exec();
 }

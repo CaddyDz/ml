@@ -10,21 +10,18 @@ Node::~Node()
 	m_left = m_right = nullptr;
 }
 
-Node& Node::operator=(const Node& node)
+Node* Node::clone() const
 {
-	if (this !=&node)
-	{
-		m_left = node.left();
-		m_right = node.right();
-		m_depth = node.depth();
-		m_type = node.type();
-		m_parent = node.parent();
+	Node* copy = new Node();
+	this->copy_into(copy);
+	return copy;
+}
 
-		if (m_left) m_left->s_depth(m_depth+1);
-		if (m_right) m_right->s_depth(m_depth+1);
-	}
-
-	return (*this);
+void Node::copy_into(Node* copy) const
+{
+	copy->m_type = m_type;
+	copy->s_children(m_left ? m_left->clone() : nullptr,
+					 m_right ? m_right->clone() : nullptr);
 }
 
 void Node::remove(Node* node)
